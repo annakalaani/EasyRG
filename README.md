@@ -1,6 +1,10 @@
 # EasyRG
 an all-in-one tool for automatic bulk analysis of ffERG waveforms in preclinical studies - ERG made easy!
 
+### Licensing
+The EasyRG program is published under a GNU General Public 3.0 License. Please consult "LICENSE" for more information on the licensing of the code.
+If you wish to re-use this code under a different licens, please contact IXA: info@IXA.nl
+
 ### For detailed instructions on how to run the code, please consult the handbook.
 
 This program was created in Rstudio as a .rmd file and was optimized for ffERG data from Brown Norway rats, retrieved from a Roland ERG machine (RETImap full flash Ganzfeld).
