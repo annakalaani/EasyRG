@@ -1,0 +1,1257 @@
+---
+title: "ERG_data_analysis"
+author: "Anna K"
+date: "2026"
+output: html_document
+---
+
+```{r variables, include=FALSE}
+
+#Please set your pathnames here. Detailed instructions can be found in the quickstart guide.
+
+input_folder = "FILL IN THE INPUT FOLDER PATH HERE"
+input_metadata = "FILL IN THE METADATA PATH HERE"
+output_folder = "FILL IN THE OUTPUT FOLDER PATH HERE"
+
+#Please set your parameters here.
+
+time_label = "Age (weeks)" #Define the time labels of your groups here. For example: "weeks since treatment", or "age".
+grouping_var = "gender" #Please set the grouping variable of your choice. This is case sensitive! Check the quickstart guide for more info.
+
+#Do you want to plot overviews of the applied filters? It is recommended to check these plots at least once, but it does take some time.
+
+plot_all = TRUE
+
+#Do you want to plot all waveforms? This will take more time, but allows you to identify potential outliers better. If so, set this variable to "TRUE"
+
+identify_outliers = FALSE
+
+#Please set this parameter to "TRUE" if you want to turn NA values into zeros (indicating an absence of a- or b-wave). Otherwise, they are kept as NA values, and they are ignored for statistical tests.
+
+NA_zero = FALSE
+
+#Change filters
+#If you are working with different animal models/strains and want to tweak the filters, you can set them here. If the filters already work well, we recommend to not touch this setting.
+
+lowpass = 30
+highpass = 235
+
+#Time settings
+#Our standard ffERG programs make 512 measurements over 350 milliseconds. If you have other settings, change them here.
+
+nr_timepoints = 512
+timespan_perwave = 350
+
+#If you have incompatible raw data and are uploading pre-processed data, set this to TRUE 
+
+incompatible_data = FALSE
+```
+
+```{r setup, include=FALSE}
+
+library(xlsx)
+
+library(tidyverse)
+
+library(signal)
+
+library(flextable)
+
+library(broom)
+
+library(shiny)
+
+library(DescTools)
+```
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=FALSE)
+```
+
+```{r load_data, results='hide'}
+#load all the raw data
+
+if(incompatible_data == FALSE){
+files = list.files(path = input_folder, full.names = TRUE)
+
+files_unique = files[!duplicated(basename(files))]
+
+raw_data = files_unique %>% 
+  map_dfr(~ read_csv(.x, show_col_types = FALSE))
+
+}else if(incompatible_data == TRUE){
+df = read.xlsx(input_folder, sheetIndex = 1)
+}
+
+patient_info = read.xlsx(input_metadata, sheetIndex = 1)
+patient_info = patient_info[-c(8)]
+```
+
+```{r prep_data}
+#prepare the data
+
+if (incompatible_data == FALSE){
+
+#this line of code works as follows: it scans the column 'clinic' until it finds the term 'Patient', then it pastes the line below (which is the patient number and is variable) in our new column "patient".
+data = raw_data
+data$patient  = ifelse(dplyr::lag(raw_data$Clinic,1,default = "NA") == "Patient",raw_data$Clinic,NA)
+
+#do the same for the date
+data$date  = ifelse(dplyr::lag(raw_data$...4,1,default = "NA") =="DateOfBirth,TestDate,PatId",raw_data$...4,NA)
+
+#finding the range that is used by the system
+range_nr  = ifelse(dplyr::lag(raw_data$Operator,1,default = "NA") =="Range(+/-[V])",raw_data$Operator,NA)
+range_nr = range_nr[!is.na(range_nr)]
+range_nr = unique(range_nr)
+
+#fill all the line of codes in between different patient numbers with the last seen patient number.
+data = data %>%
+  fill(patient) 
+
+#do the same for the date
+data = data %>%
+  fill(date) 
+
+#find the stimfreq from the metadata rows
+data = data %>%
+  mutate(
+    StimFreq = ifelse(
+      Operator == range_nr,
+      as.numeric(str_extract(...4, "[0-9.]+(?=,$)")),
+      NA_real_
+    )
+  )
+
+
+#in this chunk of code we do the following:
+#1. in the column StimFreq, we find all numerical values that are back-to-back, until we reach an NA value
+#2. We repeat the sequence of numbers 4 times in order
+#3. Then we continue going down column StimFreq again until we find new numerical values
+#4. Repeat until all numerical values were found
+#5. Remove all NAs from the output
+
+x = data$StimFreq
+
+freqval = c()
+i = 1
+n = length(x)
+
+while (i <= n) {
+  
+  # Step 1: get block of non-NA values
+  if (!is.na(x[i])) {
+    block_start = i
+    
+    while (i <= n && !is.na(x[i])) {
+      i = i + 1
+    }
+    
+    block = x[block_start:(i-1)]
+    
+    # Step 2: repeat block 4 times
+    freqval = c(freqval, rep(block, 4))
+    
+  } else {
+    # skip NA rows
+    freqval = c(freqval, x[i])
+    i = i + 1
+  }
+}
+##
+
+freqval = na.omit(freqval)
+
+
+#change labels of columns
+names(data)[names(data) == "Address"] = "Measurement_type"
+names(data)[names(data) == "...4"] = "Volt"
+
+#keep only rows that contain actual measurements (removes titles and summaries). 
+#The "Operator !=" command is to remove the lines that give the estimation of the a- and b-waves from the machine
+#And the voltage has to contain any number
+numbers = c("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
+data = data %>% dplyr::filter(grepl("-",Measurement_type) & Operator != range_nr & grepl(paste(numbers,collapse="|"), Volt))
+
+data$StimFreq = freqval
+
+#remove noise from the date 
+data$date = gsub("(.*),.*", "\\1", as.character(data$date))
+data$date = gsub(".*,","",as.character(data$date))
+
+#merge with patient data
+names(data)[names(data) == "patient"] = "identifier"
+names(data)[names(data) == "date"] = "PatId"
+
+data = merge(data,patient_info,by=c("identifier","PatId"))
+
+#remove the pause info
+data = data %>% dplyr::filter(!grepl("Pause",Measurement_type))
+
+}else if (incompatible_data == TRUE){
+  print("Pre-processed data was uploaded, moving to analysis.")
+}
+
+```
+
+
+# Data plots
+
+### Raw data
+
+```{r create_df} 
+
+#calculate the different timepoints in ms
+time_jumps = timespan_perwave/nr_timepoints
+time_points = seq(from = 0, to = timespan_perwave, by = time_jumps)
+time_points = time_points[-c(1)] #0 is not included.
+
+#make dataframe with timepoints and the volt measurements.
+
+if (incompatible_data == FALSE){
+#order the data so we don't mess up the graph
+data = data[order(data$Operator),]
+
+#combine all the rows that belong to 1 singular measurement into 1 row
+df = data %>%
+  group_by(identifier, Measurement_type, StimFreq, PatId) %>%
+  summarise(Volt = str_c(Volt, collapse = ","))
+
+} 
+
+#make every separate voltage measurement a separate row. this is automatically in order.
+df = df %>% 
+  mutate(Volt = strsplit(as.character(Volt), ",")) %>%
+  unnest(Volt)
+
+#remove NAs
+df$Volt = as.numeric(df$Volt)
+df = na.omit(df)
+
+#add timepoints
+df$Time = rep_len(time_points, length.out = length(df$Volt))
+
+#quick plot to test data quality
+test_plot = ggplot(data=df, aes(x=Time, y=Volt, color=PatId)) +
+  facet_grid(Measurement_type+StimFreq~identifier)+
+  geom_line(show.legend = FALSE)
+test_plot
+
+```
+
+### Zero-centered data
+
+```{r zero_center} 
+#filtering the data by zero-centering and applying two low-pass filters.
+
+#calculate avg voltage of measurements before flash (<20ms)
+subtract_data = df%>%
+  group_by(identifier, Measurement_type, StimFreq, PatId)%>%
+  dplyr::filter(Time <= 20)
+
+#take the average of each group and make new column subtract_val with this value
+subtract_value = subtract_data%>%
+  group_by(identifier, Measurement_type, StimFreq, PatId)%>%
+  mutate(subtract_val = mean(Volt, na.rm=TRUE))
+
+#remove rows that specify things we dont need (we only want the patient, measurement, and date to be associated with a certain subtract value)
+subtract_value = subset(subtract_value, select = -c(Volt, Time) )
+
+#remove duplicate rows
+subtract_value= unique(subtract_value)
+
+#merge the regular data frame with the subtract value to get zero-centered (0c) data
+df_0c = merge(df,subtract_value,by=c("identifier","Measurement_type", "StimFreq", "PatId"))
+
+df_0c$Volt_0c = df_0c$Volt-df_0c$subtract_val
+
+df_0c = subset(df_0c, select = -c(Volt) )
+
+#simple plot of zero-centered data
+if (plot_all == TRUE){
+test_plot_0c = ggplot(data=df_0c, aes(x=Time, y=Volt_0c, color=PatId)) +
+  facet_grid(Measurement_type+StimFreq~identifier)+
+  geom_line(show.legend = FALSE)
+
+test_plot_0c
+}
+```
+
+
+```{r filter} 
+
+#new df that omits the flicker data
+
+df_oneflash = df_0c %>% dplyr::filter(StimFreq < 1 ) #stimfreq >1 means it is a flicker
+
+#low-pass filter creatie en toepassing
+#4th order, 30Hz (1/30) en 235Hz (1/235)
+
+bf1 = butter(4, 1/lowpass, type="low")
+
+Volt_lpf= filtfilt(bf1, df_oneflash$Volt_0c) #lpf = low-pass filtered
+
+bf2 = butter(4, 1/highpass, type="high")
+
+Volt_hpf= filtfilt(bf2, df_oneflash$Volt_0c)
+
+#add new data to our df
+df_oneflash$Volt_lpf= Volt_lpf
+df_oneflash$Volt_hpf= Volt_hpf
+
+```
+
+### Filtered data (flash)
+
+1. zero-centered, removed flicker.
+2. low-pass filtered (for b-wave)
+3. high-pass filtered (for a-wave)
+
+```{r check_filter}
+
+#quick plots to check the filtering
+if (plot_all == TRUE){
+  
+plot_0c = ggplot(data=df_oneflash, aes(x=Time, y=Volt_0c, color=PatId)) +
+  facet_grid(Measurement_type~identifier)+
+  geom_line(show.legend = FALSE)
+
+plot_0c
+
+plot_lpf = ggplot(data=df_oneflash, aes(x=Time, y=Volt_lpf, color=PatId)) +
+  facet_grid(Measurement_type~identifier)+
+  geom_line(show.legend = FALSE)
+
+plot_lpf
+
+plot_hpf = ggplot(data=df_oneflash, aes(x=Time, y=Volt_hpf, color=PatId)) +
+  facet_grid(Measurement_type~identifier)+
+  geom_line(show.legend = FALSE)
+
+plot_hpf
+
+}else{
+  print("Overview plots were not created.")
+}
+
+```
+
+### Plotting the data per animal to identify potential outliers
+#This is not automatically plotted. If you want to plot all waveforms, set "identify_outliers" to TRUE.
+
+
+```{r identify_outliers}
+
+if (identify_outliers == TRUE){
+
+all_traces = df_0c
+
+all_traces =  merge(all_traces,patient_info,by=c("identifier","PatId"))
+
+all_traces$Measurement_info = paste(all_traces$Measurement_type, all_traces$StimFreq)
+
+all_traces %>%
+  group_split(identifier) %>%
+  map(~ {
+    group_name = unique(.x$identifier)
+    
+    ggplot(.x, aes(x = Time, y = Volt_0c, color = as.factor(timespan))) +
+      geom_line() +
+      facet_wrap(~ Measurement_info) +
+      labs(title = group_name, legend = time_label)
+  })
+}else if (identify_outliers == FALSE){
+  print("Individual waveforms were not printed")
+}
+```
+
+
+
+
+```{r find_ab-waves}
+#finding a and b waves in the filtered data
+
+#find all peaks
+local_maximas = df_oneflash[which(diff(sign(diff(df_oneflash$Volt_lpf)))==-2)+1,]
+
+local_maximas = subset(local_maximas, select = c(identifier, Measurement_type, StimFreq, PatId, Volt_lpf, Time) )
+names(local_maximas)[names(local_maximas) == "Volt_lpf"] = "maximas"
+
+#keep only peaks that occured after the stimulus
+local_maximas = local_maximas %>%
+  dplyr::filter(Time>20)
+
+#find the highest peak (b-wave)
+b_waves = local_maximas %>%
+  group_by(identifier, Measurement_type, StimFreq, PatId)%>%
+  top_n(1, maximas) #highest peak
+
+#make a new df for the times of the b-waves
+bwave_time = b_waves
+
+names(bwave_time)[names(bwave_time) == "Time"] = "time_bwave"
+
+bwave_time = subset(bwave_time, select = -c(maximas) )
+
+#find valleys
+local_minimas = df_oneflash[which(diff(sign(diff(df_oneflash$Volt_hpf)))==+2)-1,]
+
+local_minimas = subset(local_minimas, select = c(identifier, Measurement_type, StimFreq, PatId, Volt_hpf, Time) )
+names(local_minimas)[names(local_minimas) == "Volt_hpf"] = "minimas"
+
+#add the b-wave time to the df, so we can compare the times (a-wave must be before the b-wave)
+local_minimas = merge(local_minimas,bwave_time,by=c("identifier","Measurement_type", "StimFreq", "PatId"))
+
+#make sure the a-wave is before the b-wave and after the stimulus
+a_waves = local_minimas %>%
+  dplyr::filter(Time>20&Time<time_bwave)
+
+#find the lowest valley (a-wave)
+a_waves = a_waves %>%
+  group_by(identifier, Measurement_type, StimFreq, PatId)%>%
+  top_n(1, -minimas) #deepest valleys
+
+  
+
+
+```
+
+
+```{r data_waves, include=FALSE}
+#getting data for statistics
+
+#finding the true a-wave amplitude by interpolating the zero-centered data and looking up the timepoint we found on the filtered data.
+
+
+list_awave = list()
+
+for (i in 1:nrow(a_waves)){
+  row = a_waves[i,]
+  subset = dplyr::filter(df_0c, identifier == row$identifier & Measurement_type == row$Measurement_type & StimFreq == row$StimFreq & PatId == row$PatId)
+  print(nrow(subset))
+  awave_volt = approx(subset$Time, subset$Volt_0c, row$Time, method="linear")
+  list_awave[[i]] = awave_volt$y
+  print(ifelse(nrow(subset) == 512, "Done! Continuing...", "ERROR! Wrong number of measurements."))
+}
+print("Finished processing a-wave amplitudes")
+
+
+#finding the true b-wave amplitude by interpolating the zero-centered data and looking up the timepoint we found on the filtered data
+
+list_bwave = list()
+
+for (i in 1:nrow(b_waves)){
+  rowb = b_waves[i,]
+  subsetb = dplyr::filter(df_0c, identifier == rowb$identifier & Measurement_type == rowb$Measurement_type & StimFreq == rowb$StimFreq & PatId == rowb$PatId)
+  print(nrow(subsetb))
+  bwave_volt = approx(subsetb$Time, subsetb$Volt_0c, rowb$Time, method="linear")
+  list_bwave[[i]] = bwave_volt$y
+  print(ifelse(nrow(subset) == 512, "Done! Continuing...", "ERROR! Wrong number of measurements."))
+}
+print("Finished processing b-wave amplitudes")
+
+#optionally turn NA values to zero. You can set this at the start of the program.
+
+if (NA_zero == TRUE){
+  list_awave[is.na(list_awave)] = 0
+  list_bwave[is.na(list_bwave)] = 0
+  print("NA values were set to zero.")
+} else {
+  print("NA values were maintained.")
+}
+
+#calculate b-wave amplitude
+
+list_awave = unlist(list_awave)
+list_bwave = unlist(list_bwave)
+
+#create the dataframe with our points of interest!
+
+a_waves$awave_true = list_awave
+b_waves$bwave_true = list_bwave
+
+names(b_waves)[names(b_waves) == "Time"] = "time_bwave"
+names(a_waves)[names(a_waves) == "Time"] = "time_awave"
+a_waves = subset(a_waves, select = -c(time_bwave) )
+
+waves = merge(a_waves, b_waves, by=c("identifier", "Measurement_type", "StimFreq", "PatId"), all=TRUE)
+
+waves$NAto0 = waves$awave_true
+
+waves["NAto0"][is.na(waves["NAto0"])] = 0
+
+ERG_data = data.frame(identifier = waves$identifier, Eye=waves$Measurement_type, StimFreq= waves$StimFreq, PatId =waves$PatId, awave = -(waves$awave_true), bwave = waves$bwave_true - waves$NAto0, bwave_abs =  waves$bwave_true, awave_imp_time = waves$time_awave-20, bwave_imp_time = waves$time_bwave-20, awave_abs_time = waves$time_awave, bwave_abs_time = waves$time_bwave)
+
+ERG_data[c('eye', 'type', 'stimulus')] = str_split_fixed(ERG_data$Eye, ' ', 3)
+
+ERG_data = merge(ERG_data,patient_info,by=c("identifier","PatId"))
+
+ERG_data = ERG_data %>% mutate (treatment = 
+                   case_when(eye == "L-2" ~ treatment_left,
+                             eye == "R-1" ~ treatment_right,
+                             .default = NA))
+
+ERG_data = subset(ERG_data, select = -c(treatment_left, treatment_right) )
+
+ERG_data = ERG_data[c('identifier', 'gender', 'genotype', 'treatment', 'PatId', 'timespan', 'eye', 'type', 'stimulus', 'StimFreq', 'awave', 'bwave', 'bwave_abs', 'awave_imp_time', 'bwave_imp_time', 'awave_abs_time', 'bwave_abs_time')]
+
+
+```
+
+###Calculating and visualizing AUC
+
+
+```{r AUC, include=FALSE}
+
+
+list_AUC = list()
+
+for (i in 1:nrow(waves)){
+  rowAUC = waves[i,]
+  subsetAUC = dplyr::filter(df_0c, identifier == rowAUC$identifier & Measurement_type == rowAUC$Measurement_type & StimFreq == rowAUC$StimFreq & PatId == rowAUC$PatId)
+  print(nrow(subsetAUC))
+  xAUC = subsetAUC$Time
+  yAUC = abs(subsetAUC$Volt_0c)
+  AUC = AUC(xAUC, yAUC)
+  list_AUC[[i]] = AUC
+  print(ifelse(nrow(subset) == 512, "Done! Continuing...", "ERROR! Wrong number of measurements."))
+}
+
+list_AUC = unlist(list_AUC)
+
+ERG_data$AUC = list_AUC
+
+ERG_data$timespan = as.factor(ERG_data$timespan)
+
+auc_pic = ggplot(data=ERG_data, aes(x=timespan, y=AUC)) +
+  facet_grid(stimulus+StimFreq~.data[[grouping_var]])+
+  geom_boxplot(outlier.colour="red", outlier.shape = 8, outlier.size = 3)+
+  geom_dotplot(binaxis='y', stackdir='center', dotsize=0.5, aes(color=identifier))+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  labs(title="AUC after different stimuli",
+        x ="Weeks since treatment", y = "b-wave (V)")
+
+auc_pic
+```
+
+
+
+
+### Filtered data (flicker) 
+
+1. zero-centered data
+2. low-pass filtered
+3. high-pass filtered
+
+```{r flicker_filter} 
+
+#now selecting flicker data
+
+df_flicker = df_0c %>% dplyr::filter(StimFreq > 1 ) #stimfreq >1 means it is a flicker
+
+
+plot_flicker = ggplot(data=df_flicker, aes(x=Time, y=Volt_0c, color=PatId)) +
+  facet_grid(Measurement_type~identifier)+
+  geom_line(show.legend = FALSE)
+
+plot_flicker
+
+#low-pass filter creatie en toepassing
+#4th order, 30Hz (1/30) en 235Hz (1/235)
+
+bf1 = butter(4, 1/30, type="low")
+
+flicker_lpf= filtfilt(bf1, df_flicker$Volt_0c) #lpf = low-pass filtered
+
+bf2 = butter(4, 1/235, type="high")
+
+flicker_hpf= filtfilt(bf2, flicker_lpf)
+
+#add new data to our df
+df_flicker$flicker_lpf= flicker_lpf
+df_flicker$flicker_hpf= flicker_hpf
+```
+
+
+```{r check_flicker_filter} 
+
+flicker_plot_hpf = ggplot(data=df_flicker, aes(x=Time, y=flicker_hpf, color=PatId)) +
+  facet_grid(Measurement_type~identifier)+
+  geom_line(show.legend = FALSE)
+
+flicker_plot_hpf
+
+```
+
+
+```{r flicker_peaks}
+#finding peaks and freq of flicker data
+
+#find peaks
+flicker_maximas = df_flicker[which(diff(sign(diff(df_flicker$flicker_hpf)))==-2)+1,]
+
+flicker_maximas = subset(flicker_maximas, select = c(identifier, Measurement_type, StimFreq, PatId, flicker_hpf, Time) )
+names(flicker_maximas)[names(flicker_maximas) == "flicker_hpf"] = "maximas"
+
+flicker_maximas = flicker_maximas %>%
+  dplyr::filter(Time>20)
+
+#find the top 3 peaks -- this should already be achieved by filtering time>20, but is just a failsafe in case of weird ERG data.
+flicker_peaks = flicker_maximas %>%
+  group_by(identifier, Measurement_type, StimFreq, PatId)%>%
+  top_n(3, maximas) #highest peaks
+
+#find valleys
+flicker_minimas = df_flicker[which(diff(sign(diff(df_flicker$flicker_hpf)))==+2)-1,]
+
+flicker_minimas = subset(flicker_minimas, select = c(identifier, Measurement_type, StimFreq, PatId, flicker_hpf, Time) )
+names(flicker_minimas)[names(flicker_minimas) == "flicker_hpf"] = "minimas"
+
+#find the best valleys
+flicker_valleys = flicker_minimas %>%
+  group_by(identifier, Measurement_type, StimFreq, PatId)%>%
+  top_n(3, -minimas) #deepest valleys
+
+
+```
+
+```{r stats_flicker, include=FALSE}
+#getting data for statistics
+
+#finding the frequency of the flicker response waves
+
+flicker_stats = flicker_peaks %>%
+  group_by(identifier, StimFreq, PatId, Measurement_type) %>%
+  summarise_at(vars(Time), list(min=min, max=max))
+
+flicker_stats$freq = 1000/((flicker_stats$max-flicker_stats$min)/2)
+
+#calculating the average amplitude of the waves
+
+#first, find the true values of peaks and valleys
+list_flickerpeak = list()
+
+for (i in 1:nrow(flicker_peaks)){
+  row = flicker_peaks[i,]
+  subset = dplyr::filter(df_flicker, identifier == row$identifier & StimFreq == row$StimFreq & Measurement_type == row$Measurement_type & PatId == row$PatId)
+  flickerpeak_volt = approx(subset$Time, subset$Volt_0c, row$Time, method="linear")
+  list_flickerpeak[[i]] = flickerpeak_volt$y
+  print(ifelse(nrow(subset) == 512, "Done! Continuing...", "ERROR! Wrong number of measurements."))
+}
+print("Finished processing flicker waveform peaks.")
+
+list_flickerpeak = unlist(list_flickerpeak)
+
+flicker_peaks$maximas_0c = list_flickerpeak
+
+flicker_peak2 = flicker_peaks %>%
+  group_by(identifier, Measurement_type, StimFreq, PatId) %>%
+  dplyr::filter(n() == 1L | row_number() == 2L) %>%
+  ungroup()
+
+list_flickerval = list()
+
+for (i in 1:nrow(flicker_valleys)){
+  row = flicker_valleys[i,]
+  subset = dplyr::filter(df_flicker, identifier == row$identifier & StimFreq == row$StimFreq & Measurement_type == row$Measurement_type & PatId == row$PatId)
+  flickerval_volt = approx(subset$Time, subset$Volt_0c, row$Time, method="linear")
+  list_flickerval[[i]] = flickerval_volt$y
+  print(ifelse(nrow(subset) == 512, "Done! Continuing...", "ERROR! Wrong number of measurements."))
+}
+print("Finished processing flicker waveform valleys.")
+
+list_flickerval = unlist(list_flickerval)
+
+flicker_valleys$minimas_0c = list_flickerval
+
+flicker_val2 = flicker_valleys %>%
+  group_by(identifier, Measurement_type, StimFreq, PatId) %>%
+  dplyr::filter(n() == 1L | row_number() == 2L) %>%
+  ungroup()
+
+#now add the data to a frame and sum peaks and valleys together
+flicker_statspeak = flicker_peaks %>%
+  group_by(identifier, StimFreq, PatId, Measurement_type) %>%
+  summarise_at(vars(maximas_0c), list(sum_peaks = sum))
+
+flicker_statsval = flicker_valleys %>%
+  group_by(identifier, StimFreq, PatId, Measurement_type) %>%
+  summarise_at(vars(minimas_0c), list(sum_vals = sum))
+
+flicker_statsamp = merge(flicker_statsval,flicker_statspeak,by=c("identifier","Measurement_type","StimFreq", "PatId"))
+
+#find avg amplitude by subtracting valleys from peaks and dividing by 3 (nr of peaks/valleys)
+flicker_statsamp$avg_amp = (flicker_statsamp$sum_peaks - flicker_statsamp$sum_vals)/3
+
+flicker_statsamp = subset(flicker_statsamp, select = c(identifier, Measurement_type, StimFreq, PatId, avg_amp) )
+
+#find amp of second peak
+
+flicker_2 = merge(flicker_peak2, flicker_val2, by=c("identifier","Measurement_type", "StimFreq","PatId"))
+
+flicker_2$peak2_amp = flicker_2$maximas_0c - flicker_2$minimas_0c
+
+flicker_2 = subset(flicker_2, select = c(identifier, Measurement_type, StimFreq, PatId, peak2_amp) )
+
+#adding this data to the stats dataset
+flicker_stats = merge(flicker_stats,flicker_statsamp,by=c("identifier","Measurement_type", "StimFreq","PatId"))
+flicker_stats = merge(flicker_stats,flicker_2,by=c("identifier","Measurement_type", "StimFreq","PatId"))
+
+#renaming for clarity
+names(flicker_stats)[names(flicker_stats) == "min"] = "first_peak_time"
+
+#removing uninteresting data
+flicker_stats = subset(flicker_stats, select = -c(max) )
+
+flicker_stats[c('eye', 'type', 'stimulus')] = str_split_fixed(flicker_stats$Measurement_type, ' ', 3)
+
+flicker_stats = flicker_stats[c('identifier', 'PatId', 'eye', 'type', 'StimFreq','stimulus', 'first_peak_time', 'avg_amp', 'freq', 'peak2_amp')]
+
+#adding patient data
+flicker_stats = merge(flicker_stats,patient_info,by=c("identifier","PatId"))
+
+flicker_stats = flicker_stats %>% mutate (treatment = 
+                   case_when(eye == "L-2" ~ treatment_left,
+                             eye == "R-1" ~ treatment_right,
+                             .default = NA))
+
+flicker_stats = subset(flicker_stats, select = -c(treatment_left, treatment_right) )
+
+flicker_stats = flicker_stats[c('identifier', 'gender', 'genotype', 'treatment', 'StimFreq', 'PatId', 'timespan', 'eye', 'type', 'stimulus', 'first_peak_time', 'avg_amp', 'freq', 'peak2_amp')]
+
+write.xlsx(ERG_data, file = file.path(output_folder, "testtest.xlsx"), sheetName="flash", row.names=FALSE)
+write.xlsx(flicker_stats, file = file.path(output_folder, "testtest.xlsx"), sheetName="flicker", append=TRUE, row.names=FALSE)
+
+```
+
+
+### ANOVA for b-wave amplitude
+
+#### Graphical view of data (b-wave amplitude)
+*Shown are the average b-wave amplitudes per group with SE errorbars. The numbers at the top describe the light intensity.*
+
+```{r bwave_stats, results='hide'}
+ERG_data$.data[[grouping_var]]=as.factor(ERG_data$.data[[grouping_var]])
+ERG_data$timespan=as.factor(ERG_data$timespan)
+
+ERG_data_scotopic = ERG_data %>% dplyr::filter(type == "scotopic")
+ERG_data_photopic = ERG_data %>% dplyr::filter(type == "photopic")
+
+
+data_summary = function(data, varname, groupnames){
+  require(plyr)
+  
+  summary_func = function(x, col){
+    vals = x[[col]]
+    n = sum(!is.na(vals))
+    sd_val = sd(vals, na.rm = TRUE)
+    
+    c(
+      mean = mean(vals, na.rm = TRUE),
+      n = n,
+      sd = sd_val,
+      SE = sd_val / sqrt(n)
+    )
+  }
+  
+  data_sum = ddply(data, groupnames, .fun = summary_func, varname)
+  data_sum = rename(data_sum, c("mean" = varname))
+  return(data_sum)
+}
+  
+
+bwave_data = data_summary(ERG_data, varname="bwave", 
+                    groupnames=c("stimulus", "timespan", "type","genotype", "gender", "treatment"))
+
+
+  
+bwave_stimulus = ggplot(data=bwave_data, aes(x=timespan, y=bwave*1000000, group=.data[[grouping_var]], color=.data[[grouping_var]])) +
+  facet_wrap(.~stimulus+type, scales="free_y")+
+  geom_line(aes(color=.data[[grouping_var]]))+
+  geom_point()+
+  geom_errorbar(aes(ymin=bwave*1000000-SE*1000000, ymax=bwave*1000000+SE*1000000), width=.1)+
+  labs(title="b-wave amplitude after different stimuli",
+        x =time_label, y = "b-wave (μV)")+
+  theme_linedraw()
+
+bwave_stimulus 
+
+#ANOVA formula
+anova_formula <- as.formula(
+  paste("bwave ~", grouping_var, "* timespan")
+)
+
+# run ANOVA for each stimulus
+anova_results = ERG_data %>%
+  group_by(stimulus, type) %>%
+  nest() %>%
+  mutate(
+    model = map(data, ~ aov(anova_formula, data = .x)),
+    anova_table = map(model, broom::tidy)
+  )
+
+anova_summary = anova_results %>%
+  select(stimulus, type, anova_table) %>%
+  unnest(anova_table) %>%
+  mutate(
+    p.value.display = paste0(
+      format.pval(
+        p.value,
+        digits = 2,
+        eps = 0.001,
+        nsmall = 3
+      ),
+      
+      case_when(
+        p.value < 0.001 ~ "***",
+        p.value < 0.01  ~ "**",
+        p.value < 0.05  ~ "*",
+        TRUE ~ ""
+      )
+    )
+  )
+
+#run Tukey
+tukey_results <- anova_results %>%
+  mutate(
+    tukey = map(model, ~ TukeyHSD(.x)),
+    
+    tukey_table = map(tukey, ~ {
+      broom::tidy(.x) %>%
+        dplyr::filter(adj.p.value < 0.05) %>%
+        mutate(
+          adj.p.value = paste0(
+            format.pval(
+              adj.p.value,
+              digits = 2,
+              eps = 0.001,
+              nsmall = 3
+            ),
+            
+            case_when(
+              as.numeric(adj.p.value) < 0.001 ~ "***",
+              as.numeric(adj.p.value) < 0.01  ~ "**",
+              as.numeric(adj.p.value) < 0.05  ~ "*",
+              TRUE ~ ""
+            )
+          )
+        )
+    })
+  )
+
+tukey_results = tukey_results %>%
+  mutate(
+    flextable = map(tukey_table, flextable)
+  )
+
+all_tukey = tukey_results %>%
+  select(stimulus, type, tukey_table) %>%
+  unnest(tukey_table)
+
+write.xlsx(as.data.frame(all_tukey),file = file.path(output_folder, "testtest.xlsx"), sheetName="bwave_pval", append=TRUE, row.names=FALSE)
+
+```
+
+***
+
+#### Results of ANOVA (b-wave amplitude)
+
+model information:
+* assumes equal groups (all combinations of timespan x grouping_var should have equal participants)
+* assumes an interaction between timespan x grouping_var
+* assumes normality and homoscedasticity. 
+
+The ANOVA is run separately for each stimulus.
+
+```{r anova_bwave}
+anova_summary
+```
+
+***
+
+#### Comparisons of all groups (b-wave amplitude)
+##### *only significant results are shown*
+
+```{r anova_tuk_bwave}
+
+all_tukey
+```
+
+***
+
+#### Plots to check data quality (b-wave amplitude)
+
+##### *Residuals vs fitted should be a horizontal line with data points distributed more or less evenly around it. Visible numbers are outliers. Consider removing these.*
+
+##### *Q-Q plot should show all data points approximately in a straight line at a 45 degree angle. Large skews mean the data are not normally distributed. Consider a non-parametric approach.*
+
+*note: if you have many (near-)blind rats and just a few healthy rats, expect the QQ plot to be heavy-tailed and there to be a few outliers.*
+
+for more information on Q-Q plots and how to interpret them, check this [link](https://www.ucd.ie/ecomodel/Resources/QQplots_WebVersion.html)
+
+```{r bwave_normality}
+
+anova_results %>%
+  mutate(
+    plot_title = paste("Stimulus:", stimulus,
+                       "| Type:", type)
+  ) %>%
+  pwalk(function(model, plot_title, ...) {
+
+    par(mfrow = c(1, 2))  # side-by-side plots
+
+    # Residuals vs fitted
+    plot(
+      model,
+      which = 1,
+      main = paste("Residuals vs Fitted\n", plot_title)
+    )
+
+    # QQ plot
+    plot(
+      model,
+      which = 2,
+      main = paste("QQ Plot\n", plot_title)
+    )
+  })
+
+```
+
+### ANOVA for a-wave amplitude
+
+#### Graphical view of data (a-wave amplitude)
+*Shown are the average b-wave amplitudes per group with SE errorbars. The numbers at the top describe the light intensity.*
+
+```{r awave_stats, results='hide'}
+
+awave_data = data_summary(ERG_data, varname="awave", 
+                    groupnames=c("stimulus", "timespan", "type","genotype", "gender", "treatment"))
+
+
+awave_stimulus = ggplot(data=awave_data, aes(x=timespan, y=awave*1000000, group=.data[[grouping_var]], color=.data[[grouping_var]])) +
+  facet_wrap(.~stimulus+type, scales="free_y")+
+  geom_line(aes(color=.data[[grouping_var]]))+
+  geom_point()+
+  geom_errorbar(aes(ymin=awave*1000000-SE*1000000, ymax=awave*1000000+SE*1000000), width=.1)+
+  labs(title="a-wave amplitude after different stimuli",
+        x =time_label, y = "a-wave (μV)")+
+    theme_linedraw()
+
+awave_stimulus
+
+
+#ANOVA formula
+anova_formula_awave <- as.formula(
+  paste("awave ~", grouping_var, "* timespan")
+)
+
+# run ANOVA for each stimulus
+anova_results_awave = ERG_data %>%
+  group_by(stimulus, type) %>%
+  nest() %>%
+  mutate(
+    model = map(data, ~ aov(anova_formula_awave, data = .x)),
+    anova_table = map(model, broom::tidy)
+  )
+
+anova_summary_awave = anova_results_awave %>%
+  select(stimulus, type, anova_table) %>%
+  unnest(anova_table) %>%
+  mutate(
+    p.value.display = paste0(
+      format.pval(
+        p.value,
+        digits = 2,
+        eps = 0.001,
+        nsmall = 3
+      ),
+      
+      case_when(
+        p.value < 0.001 ~ "***",
+        p.value < 0.01  ~ "**",
+        p.value < 0.05  ~ "*",
+        TRUE ~ ""
+      )
+    )
+  )
+
+
+#run Tukey
+tukey_results_awave = anova_results_awave %>%
+  mutate(
+    tukey = map(model, ~ TukeyHSD(.x)),
+    
+    tukey_table = map(tukey, ~ {
+      broom::tidy(.x) %>%
+        dplyr::filter(adj.p.value < 0.05) %>%
+        mutate(
+          adj.p.value = paste0(
+            format.pval(
+              adj.p.value,
+              digits = 2,
+              eps = 0.001,
+              nsmall = 3
+            ),
+            
+            case_when(
+              as.numeric(adj.p.value) < 0.001 ~ "***",
+              as.numeric(adj.p.value) < 0.01  ~ "**",
+              as.numeric(adj.p.value) < 0.05  ~ "*",
+              TRUE ~ ""
+            )
+          )
+        )
+    })
+  )
+
+tukey_results_awave = tukey_results_awave %>%
+  mutate(
+    flextable = map(tukey_table, flextable)
+  )
+
+all_tukey_awave = tukey_results_awave %>%
+  select(stimulus, type, tukey_table) %>%
+  unnest(tukey_table)
+
+
+
+write.xlsx(as.data.frame(all_tukey_awave),file = file.path(output_folder, "testtest.xlsx"), sheetName="awave_pval", append=TRUE, row.names=FALSE)
+```
+
+***
+
+#### Results of ANOVA (a-wave amplitude)
+
+model information:
+* assumes equal groups (all combinations of timespan x grouping_var should have equal participants)
+* assumes an interaction between timespan x grouping_var
+* assumes normality and homoscedasticity. 
+
+```{r anova_awave}
+anova_summary_awave
+```
+
+***
+
+#### Comparisons of all groups (a-wave amplitude)
+##### *only significant results are shown*
+
+```{r anova_tuk_awave}
+
+all_tukey_awave
+```
+
+***
+
+#### Plots to check data quality (a-wave amplitude)
+
+##### *Residuals vs fitted should be a horizontal line with data points distributed more or less evenly around it. Visible numbers are outliers. Consider removing these.*
+
+##### *Q-Q plot should show all data points approximately in a straight line at a 45 degree angle. Large skews mean the data are not normally distributed. Consider a non-parametric approach.*
+
+*note: if you have many (blind) knockout rats and just a few WT rats, expect the QQ plot to be heavy-tailed and there to be a few outliers.*
+
+for more information on Q-Q plots and how to interpret them, check this [link](https://www.ucd.ie/ecomodel/Resources/QQplots_WebVersion.html)
+
+```{r awave_normality}
+
+anova_results_awave %>%
+  mutate(
+    plot_title = paste("Stimulus:", stimulus,
+                       "| Type:", type)
+  ) %>%
+  pwalk(function(model, plot_title, ...) {
+
+    par(mfrow = c(1, 2))  # side-by-side plots
+
+    # Residuals vs fitted
+    plot(
+      model,
+      which = 1,
+      main = paste("Residuals vs Fitted\n", plot_title)
+    )
+
+    # QQ plot
+    plot(
+      model,
+      which = 2,
+      main = paste("QQ Plot\n", plot_title)
+    )
+  })
+
+```
+
+
+### ANOVA for flicker peak2 amplitude
+
+#### Graphical view of data (flicker peak2 amplitude)
+
+
+```{r flicker_stats, results='hide'}
+flicker_stats$.data[[grouping_var]]=as.factor(flicker_stats$.data[[grouping_var]])
+flicker_stats$timespan=as.factor(flicker_stats$timespan)
+
+flicker_data = data_summary(flicker_stats, varname="avg_amp", 
+                    groupnames= c("stimulus", "timespan", "StimFreq","type", "genotype", "gender", "treatment"))
+
+flicker_stimulus = ggplot(data=flicker_data, aes(x=timespan, y=avg_amp*1000000, group=.data[[grouping_var]], color=.data[[grouping_var]])) +
+  geom_line(aes(color=.data[[grouping_var]]))+
+  facet_wrap(.~stimulus+StimFreq+type, labeller = label_both)+
+  geom_point()+
+  geom_errorbar(aes(ymin=avg_amp*1000000-SE*1000000, ymax=avg_amp*1000000+SE*1000000), width=.1)+
+  labs(title="average amplitude after flicker stimulus",
+        x =time_label, y = "Average amplitude (μV)")+
+  theme_linedraw()
+
+flicker_stimulus
+
+flicker_data$.data[[grouping_var]]=as.factor(flicker_data$.data[[grouping_var]])
+flicker_data$timespan=as.factor(flicker_data$timespan)
+
+#ANOVA formula
+anova_formula_flicker <- as.formula(
+  paste("avg_amp ~", grouping_var, "* timespan")
+)
+
+# run ANOVA for each stimulus
+anova_results_flicker = flicker_stats %>%
+  group_by(stimulus, type) %>%
+  nest() %>%
+  mutate(
+    model = map(data, ~ aov(anova_formula_flicker, data = .x)),
+    anova_table = map(model, broom::tidy)
+  )
+
+anova_summary_flicker = anova_results_flicker %>%
+  select(stimulus, type, anova_table) %>%
+  unnest(anova_table) %>%
+  mutate(
+    p.value.display = paste0(
+      format.pval(
+        p.value,
+        digits = 2,
+        eps = 0.001,
+        nsmall = 3
+      ),
+      
+      case_when(
+        p.value < 0.001 ~ "***",
+        p.value < 0.01  ~ "**",
+        p.value < 0.05  ~ "*",
+        TRUE ~ ""
+      )
+    )
+  )
+
+
+#run Tukey
+tukey_results_flicker = anova_results_flicker %>%
+  mutate(
+    tukey = map(model, ~ TukeyHSD(.x)),
+    
+    tukey_table = map(tukey, ~ {
+      broom::tidy(.x) %>%
+        dplyr::filter(adj.p.value < 0.05) %>%
+        mutate(
+          adj.p.value = paste0(
+            format.pval(
+              adj.p.value,
+              digits = 2,
+              eps = 0.001,
+              nsmall = 3
+            ),
+            
+            case_when(
+              as.numeric(adj.p.value) < 0.001 ~ "***",
+              as.numeric(adj.p.value) < 0.01  ~ "**",
+              as.numeric(adj.p.value) < 0.05  ~ "*",
+              TRUE ~ ""
+            )
+          )
+        )
+    })
+  )
+
+tukey_results_flicker = tukey_results_flicker %>%
+  mutate(
+    flextable = map(tukey_table, flextable)
+  )
+
+all_tukey_flicker = tukey_results_flicker %>%
+  select(stimulus, type, tukey_table) %>%
+  unnest(tukey_table)
+
+
+#write.xlsx(as.data.frame(all_tukey_flicker),file = file.path(output_folder, "testtest.xlsx"), sheetName="flicker_pval", append=TRUE, row.names=FALSE)
+
+```
+
+***
+
+#### Results of ANOVA (flicker peak2 amplitude)
+
+```{r anova_flicker}
+anova_summary_flicker
+```
+
+***
+
+#### Comparisons of all groups (flicker amplitude)
+##### *only significant results are shown*
+
+```{r anova_tuk_flicker}
+
+all_tukey_flicker
+```
+
+***
+
+#### Plots to check data quality (flicker amplitude)
+
+##### *Residuals vs fitted should be a horizontal line with data points distributed more or less evenly around it. Visible numbers are outliers. Consider removing these.*
+
+##### *Q-Q plot should show all data points approximately in a straight line at a 45 degree angle. Large skews mean the data are not normally distributed. Consider a non-parametric approach.*
+
+*note: if you have many (blind) knockout rats and just a few WT rats, expect the QQ plot to be heavy-tailed and there to be a few outliers.*
+
+for more information on Q-Q plots and how to interpret them, check this [link](https://www.ucd.ie/ecomodel/Resources/QQplots_WebVersion.html)
+
+```{r flicker_normality}
+anova_results_flicker %>%
+  mutate(
+    plot_title = paste("Stimulus:", stimulus,
+                       "| Type:", type)
+  ) %>%
+  pwalk(function(model, plot_title, ...) {
+
+    par(mfrow = c(1, 2))  # side-by-side plots
+
+    # Residuals vs fitted
+    plot(
+      model,
+      which = 1,
+      main = paste("Residuals vs Fitted\n", plot_title)
+    )
+
+    # QQ plot
+    plot(
+      model,
+      which = 2,
+      main = paste("QQ Plot\n", plot_title)
+    )
+  })
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
