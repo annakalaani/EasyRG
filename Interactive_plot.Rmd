@@ -1,0 +1,96 @@
+---
+title: "test_interactive"
+author: "Anna K"
+date: "2026-05-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+
+```{r test_ui}
+
+ui = fluidPage(
+  titlePanel("Graphic overview of data "),
+
+  sidebarLayout(
+    sidebarPanel(
+
+      selectInput(inputId = "y",
+                  label = "Y-axis:",
+                  choices = c("bwave", "awave", "bwave_imp_time", "awave_imp_time"),
+                  selected = "bwave"),
+      
+      selectInput(inputId = "x",
+                  label = "X-axis:",
+                  choices = c("stimulus", "timespan", "genotype","gender", "treatment"),
+                  selected = "timespan"),
+      
+      
+      radioButtons(inputId= "split",
+                   label="Split by (vertical axis)",
+                   choices=c("stimulus", "timespan", "genotype", "gender", "treatment", "none"),
+                   selected = "none"),
+      
+      radioButtons(inputId= "split2",
+                   label="Split by (horizontal axis)",
+                   choices=c("stimulus", "timespan", "genotype","gender", "treatment", "none"),
+                   selected = "none"),
+      
+      radioButtons(inputId = "col",
+                  label = "Color by:",
+                  choices = c("stimulus", "timespan", "genotype","gender", "treatment"),
+                  selected = "genotype")
+      
+    
+    ),
+
+    mainPanel(
+      plotOutput(outputId = "boxplot")
+      
+    )
+  )
+)
+
+server = function(input, output, session) {
+  
+  facet_formula <- reactive({
+  row <- if (input$split == "none") "." else input$split
+  col <- if (input$split2 == "none") "." else input$split2
+  
+  as.formula(paste(row, "~", col))
+})
+
+  output$boxplot = renderPlot({
+    ggplot(data = ERG_data, aes_string(y = input$y, x = input$x)) +
+    geom_boxplot(outlier.colour="red", outlier.shape = 8, outlier.size = 3)+
+      geom_dotplot(binaxis='y', stackdir='center', dotsize=0.5, aes(color=get(input$col)))+
+      theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+      facet_grid(facet_formula())
+      
+  },  width=1000,
+    height=600)
+
+}
+
+
+shinyApp(ui, server)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
