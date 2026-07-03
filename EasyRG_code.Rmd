@@ -718,8 +718,8 @@ flicker_stats = subset(flicker_stats, select = -c(treatment_left, treatment_righ
 
 flicker_stats = flicker_stats[c('identifier', 'gender', 'genotype', 'treatment', 'StimFreq', 'PatId', 'timespan', 'eye', 'type', 'stimulus', 'first_peak_time', 'avg_amp', 'freq', 'peak2_amp')]
 
-write.xlsx(ERG_data, file = file.path(output_folder, "testtest.xlsx"), sheetName="flash", row.names=FALSE)
-write.xlsx(flicker_stats, file = file.path(output_folder, "testtest.xlsx"), sheetName="flicker", append=TRUE, row.names=FALSE)
+write.xlsx(ERG_data, file = file.path(output_folder, "output.xlsx"), sheetName="flash", row.names=FALSE)
+write.xlsx(flicker_stats, file = file.path(output_folder, "output.xlsx"), sheetName="flicker", append=TRUE, row.names=FALSE)
 
 ```
 
@@ -817,7 +817,6 @@ tukey_results <- anova_results %>%
     
     tukey_table = map(tukey, ~ {
       broom::tidy(.x) %>%
-        dplyr::filter(adj.p.value < 0.05) %>%
         mutate(
           adj.p.value = paste0(
             format.pval(
@@ -847,8 +846,10 @@ all_tukey = tukey_results %>%
   select(stimulus, type, tukey_table) %>%
   unnest(tukey_table)
 
-write.xlsx(as.data.frame(all_tukey),file = file.path(output_folder, "testtest.xlsx"), sheetName="bwave_pval", append=TRUE, row.names=FALSE)
+tukey_signif = all_tukey %>%
+  dplyr::filter(stringr::str_detect(adj.p.value, "\\*"))
 
+write.xlsx(as.data.frame(all_tukey),file = file.path(output_folder, "output.xlsx"), sheetName="bwave_pval", append=TRUE, row.names=FALSE)
 ```
 
 ***
@@ -873,7 +874,7 @@ anova_summary
 
 ```{r anova_tuk_bwave}
 
-all_tukey
+tukey_signif
 ```
 
 ***
@@ -982,7 +983,6 @@ tukey_results_awave = anova_results_awave %>%
     
     tukey_table = map(tukey, ~ {
       broom::tidy(.x) %>%
-        dplyr::filter(adj.p.value < 0.05) %>%
         mutate(
           adj.p.value = paste0(
             format.pval(
@@ -1013,8 +1013,11 @@ all_tukey_awave = tukey_results_awave %>%
   unnest(tukey_table)
 
 
+tukey_awave_signif = all_tukey_awave %>%
+  dplyr::filter(stringr::str_detect(adj.p.value, "\\*"))
 
-write.xlsx(as.data.frame(all_tukey_awave),file = file.path(output_folder, "testtest.xlsx"), sheetName="awave_pval", append=TRUE, row.names=FALSE)
+
+write.xlsx(as.data.frame(all_tukey_awave),file = file.path(output_folder, "output.xlsx"), sheetName="awave_pval", append=TRUE, row.names=FALSE)
 ```
 
 ***
@@ -1037,7 +1040,7 @@ anova_summary_awave
 
 ```{r anova_tuk_awave}
 
-all_tukey_awave
+tukey_awave_signif
 ```
 
 ***
@@ -1150,7 +1153,6 @@ tukey_results_flicker = anova_results_flicker %>%
     
     tukey_table = map(tukey, ~ {
       broom::tidy(.x) %>%
-        dplyr::filter(adj.p.value < 0.05) %>%
         mutate(
           adj.p.value = paste0(
             format.pval(
@@ -1180,8 +1182,11 @@ all_tukey_flicker = tukey_results_flicker %>%
   select(stimulus, type, tukey_table) %>%
   unnest(tukey_table)
 
+tukey_flicker_signif = all_tukey_flicker %>%
+  dplyr::filter(stringr::str_detect(adj.p.value, "\\*"))
 
-#write.xlsx(as.data.frame(all_tukey_flicker),file = file.path(output_folder, "testtest.xlsx"), sheetName="flicker_pval", append=TRUE, row.names=FALSE)
+write.xlsx(as.data.frame(all_tukey_flicker),file = file.path(output_folder, "output.xlsx"), sheetName="flicker_pval", append=TRUE, row.names=FALSE)
+
 
 ```
 
@@ -1200,7 +1205,7 @@ anova_summary_flicker
 
 ```{r anova_tuk_flicker}
 
-all_tukey_flicker
+tukey_flicker_signif
 ```
 
 ***
