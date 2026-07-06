@@ -38,6 +38,20 @@ The html file will contain the plotted waveforms, as well as plots showing the a
 
 The excel output file that is created, on the other hand, contains all calculated outcomes (for flash waveforms: amplitudes, implicit times, and area under the curve; for flicker waveforms: average amplitude and peak 2 amplitude). It also contains *all* results of the statistical tests, so not only the significant ones.
 
+### Interactive plot
+
+<img width="1130" height="580" alt="Screenshot 2026-07-06 at 16 02 34" src="https://github.com/user-attachments/assets/22cd6a43-181f-41df-87b5-554361d3b17c" />
+
+
+To create the interactive plot, first run the main code in R (so do not knit).
+Then run the chunk called "test_ui" and the plot will appear in a pop-up.
+
+
+<img width="1502" height="863" alt="Screenshot 2026-07-06 at 16 01 38" src="https://github.com/user-attachments/assets/194b3a58-70c8-423c-9c05-e26a33e7f646" />
+
+
+You can play with the facets and coloring of the plot here to explore your data and identify any interesting group differences. This is especially useful if you are not sure what differences to expect and do not want to waste time running many different analyses.
+
 ### For more detailed instructions on how to run the code, please consult the handbook.
 
 PLEASE NOTE!
