@@ -66,7 +66,7 @@ server = function(input, output, session) {
   output$boxplot = renderPlot({
     ggplot(data = ERG_data, aes_string(y = input$y, x = input$x)) +
     geom_boxplot(outlier.colour="red", outlier.shape = 8, outlier.size = 3)+
-      geom_dotplot(binaxis='y', stackdir='center', dotsize=0.5, aes(color=get(input$col)))+
+      geom_dotplot(binaxis='y', stackdir='center', dotsize=0.5, aes(color=get(input$col), fill=get(input$col))+
       theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
       facet_grid(facet_formula())
       
