@@ -47,7 +47,7 @@ To create the interactive plot, first run the main code in R (so do not knit).
 Then run the chunk called "test_ui" and the plot will appear in a pop-up.
 
 
-<img width="1502" height="863" alt="Screenshot 2026-07-06 at 16 01 38" src="https://github.com/user-attachments/assets/194b3a58-70c8-423c-9c05-e26a33e7f646" />
+<img width="1506" height="819" alt="Screenshot 2026-07-08 at 12 59 57" src="https://github.com/user-attachments/assets/0ad884e5-e755-4be0-a9c6-a977c5ef0bdb" />
 
 
 You can play with the facets and coloring of the plot here to explore your data and identify any interesting group differences. This is especially useful if you are not sure what differences to expect and do not want to waste time running many different analyses.
