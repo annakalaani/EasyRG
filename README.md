@@ -3,7 +3,7 @@ an all-in-one tool for automatic bulk analysis of ffERG waveforms in preclinical
 
 ### Licensing
 The EasyRG program is published under a GNU General Public 3.0 License. The example data are licensed under a CC BY-NC-SA 4.0 license. Please consult "LICENSE" for more information on the licensing of the code.
-If you wish to re-use this code under a different licens, please contact IXA: info@IXA.nl
+If you wish to re-use this code under a different license, please contact IXA: info@IXA.nl
 
 All Files & Source Code is Copyright of Amsterdam UMC 2026 &copy; 
 
