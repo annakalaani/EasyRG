@@ -54,6 +54,12 @@ Then run the chunk called "test_ui" and the plot will appear in a pop-up.
 
 You can play with the facets and coloring of the plot here to explore your data and identify any interesting group differences. This is especially useful if you are not sure what differences to expect and do not want to waste time running many different analyses.
 
+### Automated artifact removal (BETA)
+
+In our latest update, we introduced an option for automated artifact removal. The handbook describes how this works. Automated artifact removal is not yet recommended as part of the standard ERG pipeline, but feel free to test it out and let us know how it works for you or if you have any suggestions. If you do perform automated artifact removal, the removed artifacts will be plotted in the html file and the information on the waveforms will be included in the Excel file (as in the image below).
+
+<img width="1240" height="400" alt="Screenshot 2026-09-24 at 12 14 03" src="https://github.com/user-attachments/assets/3ab24340-7297-43c7-868d-f7a516babee2" />
+
 ### For more detailed instructions on how to run the code, please consult the handbook.
 
 PLEASE NOTE!
