@@ -30,11 +30,19 @@ identify_outliers = FALSE
 
 NA_zero = FALSE
 
+#Please set this parameter to "FALSE" if you do not want to discard negative a- or b-wave values, for example when you expect negative ERG waveforms.
+
+no_negatives = TRUE
+
+#Please set remove_artifacts to "TRUE" if you want to make use of automated artifact removal. You can also set less strict requirements for artifact removal by setting high_certainty to "FALSE".
+remove_artifacts = FALSE
+high_certainty = TRUE
+
 #Change filters
 #If you are working with different animal models/strains and want to tweak the filters, you can set them here. If the filters already work well, we recommend to not touch this setting.
 
-lowpass = 30
-highpass = 235
+lowpass = 25
+highpass = 3
 
 #Time settings
 #Our standard ffERG programs make 512 measurements over 350 milliseconds. If you have other settings, change them here.
@@ -251,7 +259,7 @@ subtract_data = df%>%
 #take the average of each group and make new column subtract_val with this value
 subtract_value = subtract_data%>%
   group_by(identifier, Measurement_type, StimFreq, PatId)%>%
-  mutate(subtract_val = mean(Volt, na.rm=TRUE))
+  mutate(subtract_val = mean(Volt, na.rm=TRUE), sd_val = sd(Volt, na.rm=TRUE))
 
 #remove rows that specify things we dont need (we only want the patient, measurement, and date to be associated with a certain subtract value)
 subtract_value = subset(subtract_value, select = -c(Volt, Time) )
@@ -264,7 +272,7 @@ df_0c = merge(df,subtract_value,by=c("identifier","Measurement_type", "StimFreq"
 
 df_0c$Volt_0c = df_0c$Volt-df_0c$subtract_val
 
-df_0c = subset(df_0c, select = -c(Volt) )
+df_0c = subset(df_0c, select = -c(Volt, sd_val) )
 
 #simple plot of zero-centered data
 if (plot_all == TRUE){
@@ -274,25 +282,159 @@ test_plot_0c = ggplot(data=df_0c, aes(x=Time, y=Volt_0c, color=PatId)) +
 
 test_plot_0c
 }
-```
-
-
-```{r filter} 
 
 #new df that omits the flicker data
 
 df_oneflash = df_0c %>% dplyr::filter(StimFreq < 1 ) #stimfreq >1 means it is a flicker
 
-#low-pass filter creatie en toepassing
-#4th order, 30Hz (1/30) en 235Hz (1/235)
+```
 
-bf1 = butter(4, 1/lowpass, type="low")
+```{r}
+if (remove_artifacts == TRUE) {
+#First artifact score: baseline instability
+artifact_baseline = subtract_value %>% dplyr::filter(sd_val >= 0.000005)
+
+artifact_df = df_0c
+#Calculating some features of the waveforms
+waveform_features <- artifact_df %>%
+  arrange(identifier, Measurement_type, StimFreq, PatId, Time) %>%
+  group_by(identifier, Measurement_type, StimFreq, PatId) %>%
+  summarise(
+    
+    # overall slope
+    slope = coef(lm(Volt_0c ~ Time))[2],
+    
+    # change from beginning to end
+    baseline = mean(Volt_0c[1:20], na.rm = TRUE),
+    end_value = mean(tail(Volt_0c, 20), na.rm = TRUE),
+    drift = end_value - baseline,
+    
+    # how much of the total movement is in one direction
+    net_change = abs(end_value - baseline),
+    total_movement = sum(abs(diff(Volt_0c)), na.rm = TRUE),
+    drift_ratio = net_change / total_movement,
+    
+    .groups = "drop"
+  )
+
+#Second artifact score: drift ratio (drift normalized to total movement of the waveform)
+artifact_drift = waveform_features %>% dplyr::filter(drift_ratio > 0.25)
+
+#Third artifact score: directionality
+artifact_slope = waveform_features %>% dplyr::filter(net_change > 0.0002 | net_change < -0.0002)
+
+
+a1 <- artifact_baseline %>%
+  distinct(identifier, Measurement_type, StimFreq, PatId) %>%
+  mutate(baseline_flag = if_else(StimFreq < 1, 1, 0))
+
+a2 <- artifact_drift %>%
+  distinct(identifier, Measurement_type, StimFreq, PatId) %>%
+  mutate(drift_flag = 2)
+
+a3 <- artifact_slope %>%
+  distinct(identifier, Measurement_type, StimFreq, PatId) %>%
+  mutate(slope_flag = 1)
+
+
+artifact_scores <- full_join(
+  a1, a2,
+  by = c("identifier", "Measurement_type", "StimFreq", "PatId")
+) %>%
+  full_join(
+    a3,
+    by = c("identifier", "Measurement_type", "StimFreq", "PatId")
+  ) %>%
+  mutate(
+    across(ends_with("_flag"), ~ replace_na(.x, 0)),
+    artifact_score = baseline_flag + drift_flag + slope_flag
+  )
+
+high_artifact_chance = artifact_scores %>% dplyr::filter(artifact_score >= 2)
+low_artifact_chance = artifact_scores %>% dplyr::filter(artifact_score == 1)
+
+high_artifact_chance_df = merge(df_0c,high_artifact_chance,by=c("identifier","Measurement_type", "StimFreq", "PatId"))
+low_artifact_chance_df = merge(df_0c,low_artifact_chance,by=c("identifier","Measurement_type", "StimFreq", "PatId"))
+}
+```
+
+### If artifacts were removed automatically, they will be plotted here:
+
+```{r}
+if (remove_artifacts == TRUE) {
+#create dataframe containing the artifacts that should be removed
+#you can easily modify this dataframe to contain more or less waveforms if you want to manually adjust anything.
+
+if (high_certainty == TRUE){
+to_remove = high_artifact_chance
+
+high_artifact_chance_plot = ggplot(data=high_artifact_chance_df, aes(x=Time, y=Volt_0c, color=PatId)) +
+  facet_grid(Measurement_type+StimFreq~identifier)+
+  geom_line(show.legend = FALSE)+
+  labs(title = "Removed waveforms (high-score waveforms only)")
+
+high_artifact_chance_plot
+
+}else{
+to_remove = rbind(high_artifact_chance, low_artifact_chance)
+
+low_certainty_df = merge(df_0c,to_remove,by=c("identifier","Measurement_type", "StimFreq", "PatId"))
+
+low_certainty_plot = ggplot(data=low_artifact_chance_df, aes(x=Time, y=Volt_0c, color=PatId)) +
+  facet_grid(Measurement_type+StimFreq~identifier)+
+  geom_line(show.legend = FALSE)+
+  labs(title = "Removed waveforms (low-score waveforms included)")
+
+low_certainty_plot
+
+}
+}
+```
+
+```{r}
+if (remove_artifacts == TRUE) {
+#Want to keep a waveform that is in the dataframe? Use the following code (remove the hashtag first):
+
+#to_remove = to_remove %>% dplyr::filter(identifier != "your identifier" | Measurement_type != "your measurement type" | PatId != "your PatId")
+  
+df_0c = df_0c %>%
+  anti_join(
+    to_remove,
+    by = c("identifier", "Measurement_type", "PatId", "StimFreq")
+  )
+  
+  print("Artifacts were removed. New dataset without artifacts:")
+  
+  test_plot_0c = ggplot(data=df_0c, aes(x=Time, y=Volt_0c, color=PatId)) +
+  facet_grid(Measurement_type+StimFreq~identifier)+
+  geom_line(show.legend = FALSE)
+
+  test_plot_0c
+  
+}else{
+  print("Artifacts were not automatically removed.")
+}
+
+```
+
+
+
+
+```{r filter} 
+df_oneflash = df_0c %>% dplyr::filter(StimFreq < 1 )
+
+#low-pass filter creation and usage
+#4th order, two-way
+
+nyquist = (nr_timepoints/(timespan_perwave/1000))/2
+
+bf1 = butter(4, lowpass/nyquist, type="low")
 
 Volt_lpf= filtfilt(bf1, df_oneflash$Volt_0c) #lpf = low-pass filtered
 
-bf2 = butter(4, 1/highpass, type="high")
+bf2 = butter(4, highpass/nyquist, type="high")
 
-Volt_hpf= filtfilt(bf2, df_oneflash$Volt_0c)
+Volt_hpf= filtfilt(bf2, df_oneflash$Volt_0c) #hpf = high-pass filtered
 
 #add new data to our df
 df_oneflash$Volt_lpf= Volt_lpf
@@ -363,7 +505,6 @@ all_traces %>%
   print("Individual waveforms were not printed")
 }
 ```
-
 
 
 
@@ -479,7 +620,29 @@ waves$NAto0 = waves$awave_true
 
 waves["NAto0"][is.na(waves["NAto0"])] = 0
 
-ERG_data = data.frame(identifier = waves$identifier, Eye=waves$Measurement_type, StimFreq= waves$StimFreq, PatId =waves$PatId, awave = -(waves$awave_true), bwave = waves$bwave_true - waves$NAto0, bwave_abs =  waves$bwave_true, awave_imp_time = waves$time_awave-20, bwave_imp_time = waves$time_bwave-20, awave_abs_time = waves$time_awave, bwave_abs_time = waves$time_bwave)
+waves$awave_true = -(waves$awave_true)
+
+if (no_negatives == TRUE){
+  waves$awave_true[waves$awave_true < 0] = 0
+  waves$time_awave[waves$awave_true == 0] = NA
+  print("Negative a-wave values were removed.")
+} else {
+  print("Negative a-wave values were maintained.")
+}
+
+
+if (no_negatives == TRUE){
+  waves$bwave_true[waves$bwave_true < 0] = 0
+  waves$time_bwave[waves$bwave_true == 0] = NA
+  print("Negative b-wave values were removed.")
+} else {
+  print("Negative b-wave values were maintained.")
+}
+
+ERG_data = data.frame(identifier = waves$identifier, Eye=waves$Measurement_type, StimFreq= waves$StimFreq, PatId =waves$PatId, awave = waves$awave_true, bwave = waves$bwave_true - waves$NAto0, bwave_abs =  waves$bwave_true, awave_imp_time = waves$time_awave-20, bwave_imp_time = waves$time_bwave-20, awave_abs_time = waves$time_awave, bwave_abs_time = waves$time_bwave)
+
+ERG_data$bwave[ERG_data$bwave < 0] = 0
+ERG_data$bwave_imp_time[ERG_data$bwave == 0] = NA
 
 ERG_data[c('eye', 'type', 'stimulus')] = str_split_fixed(ERG_data$Eye, ' ', 3)
 
@@ -493,11 +656,9 @@ ERG_data = ERG_data %>% mutate (treatment =
 ERG_data = subset(ERG_data, select = -c(treatment_left, treatment_right) )
 
 ERG_data = ERG_data[c('identifier', 'gender', 'genotype', 'treatment', 'PatId', 'timespan', 'eye', 'type', 'stimulus', 'StimFreq', 'awave', 'bwave', 'bwave_abs', 'awave_imp_time', 'bwave_imp_time', 'awave_abs_time', 'bwave_abs_time')]
-
-
 ```
 
-###Calculating AUC
+###Calculating and visualizing AUC
 
 
 ```{r AUC, include=FALSE}
@@ -521,6 +682,16 @@ list_AUC = unlist(list_AUC)
 ERG_data$AUC = list_AUC
 
 ERG_data$timespan = as.factor(ERG_data$timespan)
+
+auc_pic = ggplot(data=ERG_data, aes(x=timespan, y=AUC)) +
+  facet_grid(stimulus+StimFreq~.data[[grouping_var]])+
+  geom_boxplot(outlier.colour="red", outlier.shape = 8, outlier.size = 3)+
+  geom_dotplot(binaxis='y', stackdir='center', dotsize=0.5, aes(color=identifier))+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  labs(title="AUC after different stimuli",
+        x ="Weeks since treatment", y = "b-wave (V)")
+
+auc_pic
 ```
 
 
@@ -545,14 +716,8 @@ plot_flicker = ggplot(data=df_flicker, aes(x=Time, y=Volt_0c, color=PatId)) +
 
 plot_flicker
 
-#low-pass filter creatie en toepassing
-#4th order, 30Hz (1/30) en 235Hz (1/235)
-
-bf1 = butter(4, 1/30, type="low")
-
+#filtering the flicker waveforms
 flicker_lpf= filtfilt(bf1, df_flicker$Volt_0c) #lpf = low-pass filtered
-
-bf2 = butter(4, 1/235, type="high")
 
 flicker_hpf= filtfilt(bf2, flicker_lpf)
 
@@ -563,22 +728,18 @@ df_flicker$flicker_hpf= flicker_hpf
 
 
 ```{r check_flicker_filter} 
-if (plot_all == TRUE){
+
 flicker_plot_hpf = ggplot(data=df_flicker, aes(x=Time, y=flicker_hpf, color=PatId)) +
   facet_grid(Measurement_type~identifier)+
   geom_line(show.legend = FALSE)
 
 flicker_plot_hpf
 
-}else{
-  print("Overview plots were not created.")
-}
-
 ```
 
 
 ```{r flicker_peaks}
-#finding peaks of flicker data
+#finding peaks and freq of flicker data
 
 #find peaks
 flicker_maximas = df_flicker[which(diff(sign(diff(df_flicker$flicker_hpf)))==-2)+1,]
@@ -589,7 +750,7 @@ names(flicker_maximas)[names(flicker_maximas) == "flicker_hpf"] = "maximas"
 flicker_maximas = flicker_maximas %>%
   dplyr::filter(Time>20)
 
-#find the top 3 peaks (this is just a failsafe in case of weird ERG data).
+#find the top 3 peaks -- this should already be achieved by filtering time>20, but is just a failsafe in case of weird ERG data.
 flicker_peaks = flicker_maximas %>%
   group_by(identifier, Measurement_type, StimFreq, PatId)%>%
   top_n(3, maximas) #highest peaks
@@ -611,9 +772,13 @@ flicker_valleys = flicker_minimas %>%
 ```{r stats_flicker, include=FALSE}
 #getting data for statistics
 
+#finding the frequency of the flicker response waves
+
 flicker_stats = flicker_peaks %>%
   group_by(identifier, StimFreq, PatId, Measurement_type) %>%
   summarise_at(vars(Time), list(min=min, max=max))
+
+flicker_stats$freq = 1000/((flicker_stats$max-flicker_stats$min)/2)
 
 #calculating the average amplitude of the waves
 
@@ -694,7 +859,7 @@ flicker_stats = subset(flicker_stats, select = -c(max) )
 
 flicker_stats[c('eye', 'type', 'stimulus')] = str_split_fixed(flicker_stats$Measurement_type, ' ', 3)
 
-flicker_stats = flicker_stats[c('identifier', 'PatId', 'eye', 'type', 'StimFreq','stimulus', 'first_peak_time', 'avg_amp', 'peak2_amp')]
+flicker_stats = flicker_stats[c('identifier', 'PatId', 'eye', 'type', 'StimFreq','stimulus', 'first_peak_time', 'avg_amp', 'freq', 'peak2_amp')]
 
 #adding patient data
 flicker_stats = merge(flicker_stats,patient_info,by=c("identifier","PatId"))
@@ -706,11 +871,19 @@ flicker_stats = flicker_stats %>% mutate (treatment =
 
 flicker_stats = subset(flicker_stats, select = -c(treatment_left, treatment_right) )
 
-flicker_stats = flicker_stats[c('identifier', 'gender', 'genotype', 'treatment', 'StimFreq', 'PatId', 'timespan', 'eye', 'type', 'stimulus', 'first_peak_time', 'avg_amp', 'peak2_amp')]
+flicker_stats = flicker_stats[c('identifier', 'gender', 'genotype', 'treatment', 'StimFreq', 'PatId', 'timespan', 'eye', 'type', 'stimulus', 'first_peak_time', 'avg_amp', 'freq', 'peak2_amp')]
 
 write.xlsx(ERG_data, file = file.path(output_folder, "output.xlsx"), sheetName="flash", row.names=FALSE)
 write.xlsx(flicker_stats, file = file.path(output_folder, "output.xlsx"), sheetName="flicker", append=TRUE, row.names=FALSE)
 
+if(exists("to_remove")){
+  
+to_remove = to_remove %>%
+  dplyr::ungroup()
+
+write.xlsx(as.data.frame(to_remove), file = file.path(output_folder, "output.xlsx"), sheetName="Removed_artifacts", append=TRUE, row.names=FALSE)
+  
+}
 ```
 
 
@@ -750,7 +923,7 @@ data_summary = function(data, varname, groupnames){
   
 
 bwave_data = data_summary(ERG_data, varname="bwave", 
-                    groupnames=c("stimulus", "timespan", "type","genotype", "gender", "treatment"))
+                    groupnames=c("stimulus", "timespan", "type", grouping_var))
 
 
   
@@ -771,12 +944,27 @@ anova_formula <- as.formula(
 )
 
 # run ANOVA for each stimulus
-anova_results = ERG_data %>%
+anova_results <- ERG_data %>%
   group_by(stimulus, type) %>%
   nest() %>%
   mutate(
-    model = map(data, ~ aov(anova_formula, data = .x)),
-    anova_table = map(model, broom::tidy)
+    n_groups = map_int(data, ~ n_distinct(.x[[grouping_var]])), #makes sure the code doesnt crash if you have one stimulus with only one group
+    model = map(
+      data,
+      ~ if (n_distinct(.x[[grouping_var]]) >= 2) {
+          aov(anova_formula, data = .x)
+        } else {
+          NULL
+        }
+    ),
+    anova_table = map(
+      model,
+      ~ if (is.null(.x)) {
+          NULL
+        } else {
+          broom::tidy(.x)
+        }
+    )
   )
 
 anova_summary = anova_results %>%
@@ -800,8 +988,11 @@ anova_summary = anova_results %>%
     )
   )
 
+anova_results_filtered <- anova_results %>%
+  dplyr::filter(map_lgl(model, ~ !is.null(.x)))
+
 #run Tukey
-tukey_results <- anova_results %>%
+tukey_results <- anova_results_filtered %>%
   mutate(
     tukey = map(model, ~ TukeyHSD(.x)),
     
@@ -840,6 +1031,7 @@ tukey_signif = all_tukey %>%
   dplyr::filter(stringr::str_detect(adj.p.value, "\\*"))
 
 write.xlsx(as.data.frame(all_tukey),file = file.path(output_folder, "output.xlsx"), sheetName="bwave_pval", append=TRUE, row.names=FALSE)
+
 ```
 
 ***
@@ -881,7 +1073,7 @@ for more information on Q-Q plots and how to interpret them, check this [link](h
 
 ```{r bwave_normality}
 
-anova_results %>%
+anova_results_filtered %>%
   mutate(
     plot_title = paste("Stimulus:", stimulus,
                        "| Type:", type)
@@ -915,7 +1107,7 @@ anova_results %>%
 ```{r awave_stats, results='hide'}
 
 awave_data = data_summary(ERG_data, varname="awave", 
-                    groupnames=c("stimulus", "timespan", "type","genotype", "gender", "treatment"))
+                     groupnames=c("stimulus", "timespan", "type", grouping_var))
 
 
 awave_stimulus = ggplot(data=awave_data, aes(x=timespan, y=awave*1000000, group=.data[[grouping_var]], color=.data[[grouping_var]])) +
@@ -940,8 +1132,23 @@ anova_results_awave = ERG_data %>%
   group_by(stimulus, type) %>%
   nest() %>%
   mutate(
-    model = map(data, ~ aov(anova_formula_awave, data = .x)),
-    anova_table = map(model, broom::tidy)
+    n_groups = map_int(data, ~ n_distinct(.x[[grouping_var]])), #makes sure the code doesnt crash if you have one stimulus with only one group
+    model = map(
+      data,
+      ~ if (n_distinct(.x[[grouping_var]]) >= 2) {
+          aov(anova_formula_awave, data = .x)
+        } else {
+          NULL
+        }
+    ),
+    anova_table = map(
+      model,
+      ~ if (is.null(.x)) {
+          NULL
+        } else {
+          broom::tidy(.x)
+        }
+    )
   )
 
 anova_summary_awave = anova_results_awave %>%
@@ -965,9 +1172,12 @@ anova_summary_awave = anova_results_awave %>%
     )
   )
 
+anova_results_awave_filtered = anova_results_awave %>%
+  dplyr::filter(map_lgl(model, ~ !is.null(.x)))
+
 
 #run Tukey
-tukey_results_awave = anova_results_awave %>%
+tukey_results_awave = anova_results_awave_filtered %>%
   mutate(
     tukey = map(model, ~ TukeyHSD(.x)),
     
@@ -1005,6 +1215,7 @@ all_tukey_awave = tukey_results_awave %>%
 
 tukey_awave_signif = all_tukey_awave %>%
   dplyr::filter(stringr::str_detect(adj.p.value, "\\*"))
+
 
 
 write.xlsx(as.data.frame(all_tukey_awave),file = file.path(output_folder, "output.xlsx"), sheetName="awave_pval", append=TRUE, row.names=FALSE)
@@ -1047,7 +1258,7 @@ for more information on Q-Q plots and how to interpret them, check this [link](h
 
 ```{r awave_normality}
 
-anova_results_awave %>%
+anova_results_awave_filtered %>%
   mutate(
     plot_title = paste("Stimulus:", stimulus,
                        "| Type:", type)
@@ -1074,9 +1285,9 @@ anova_results_awave %>%
 ```
 
 
-### ANOVA for flicker average amplitude
+### ANOVA for flicker peak2 amplitude
 
-#### Graphical view of data (flicker average amplitude)
+#### Graphical view of data (flicker peak2 amplitude)
 
 
 ```{r flicker_stats, results='hide'}
@@ -1084,7 +1295,7 @@ flicker_stats$.data[[grouping_var]]=as.factor(flicker_stats$.data[[grouping_var]
 flicker_stats$timespan=as.factor(flicker_stats$timespan)
 
 flicker_data = data_summary(flicker_stats, varname="avg_amp", 
-                    groupnames= c("stimulus", "timespan", "StimFreq","type", "genotype", "gender", "treatment"))
+                     groupnames=c("stimulus", "timespan", "type", "StimFreq",grouping_var))
 
 flicker_stimulus = ggplot(data=flicker_data, aes(x=timespan, y=avg_amp*1000000, group=.data[[grouping_var]], color=.data[[grouping_var]])) +
   geom_line(aes(color=.data[[grouping_var]]))+
@@ -1107,15 +1318,30 @@ anova_formula_flicker <- as.formula(
 
 # run ANOVA for each stimulus
 anova_results_flicker = flicker_stats %>%
-  group_by(stimulus, type) %>%
+  group_by(stimulus, type, StimFreq) %>%
   nest() %>%
   mutate(
-    model = map(data, ~ aov(anova_formula_flicker, data = .x)),
-    anova_table = map(model, broom::tidy)
+    n_groups = map_int(data, ~ n_distinct(.x[[grouping_var]])), #makes sure the code doesnt crash if you have one stimulus with only one group
+    model = map(
+      data,
+      ~ if (n_distinct(.x[[grouping_var]]) >= 2) {
+          aov(anova_formula_flicker, data = .x)
+        } else {
+          NULL
+        }
+    ),
+    anova_table = map(
+      model,
+      ~ if (is.null(.x)) {
+          NULL
+        } else {
+          broom::tidy(.x)
+        }
+    )
   )
 
 anova_summary_flicker = anova_results_flicker %>%
-  select(stimulus, type, anova_table) %>%
+  select(stimulus, type, StimFreq, anova_table) %>%
   unnest(anova_table) %>%
   mutate(
     p.value.display = paste0(
@@ -1135,9 +1361,13 @@ anova_summary_flicker = anova_results_flicker %>%
     )
   )
 
+anova_results_flicker_filtered = anova_results_flicker %>%
+  dplyr::filter(map_lgl(model, ~ !is.null(.x)))
+
+
 
 #run Tukey
-tukey_results_flicker = anova_results_flicker %>%
+tukey_results_flicker = anova_results_flicker_filtered %>%
   mutate(
     tukey = map(model, ~ TukeyHSD(.x)),
     
@@ -1169,14 +1399,13 @@ tukey_results_flicker = tukey_results_flicker %>%
   )
 
 all_tukey_flicker = tukey_results_flicker %>%
-  select(stimulus, type, tukey_table) %>%
+  select(stimulus, type, StimFreq, tukey_table) %>%
   unnest(tukey_table)
 
 tukey_flicker_signif = all_tukey_flicker %>%
   dplyr::filter(stringr::str_detect(adj.p.value, "\\*"))
 
 write.xlsx(as.data.frame(all_tukey_flicker),file = file.path(output_folder, "output.xlsx"), sheetName="flicker_pval", append=TRUE, row.names=FALSE)
-
 
 ```
 
@@ -1211,7 +1440,7 @@ tukey_flicker_signif
 for more information on Q-Q plots and how to interpret them, check this [link](https://www.ucd.ie/ecomodel/Resources/QQplots_WebVersion.html)
 
 ```{r flicker_normality}
-anova_results_flicker %>%
+anova_results_flicker_filtered %>%
   mutate(
     plot_title = paste("Stimulus:", stimulus,
                        "| Type:", type)
@@ -1236,13 +1465,6 @@ anova_results_flicker %>%
   })
 
 ```
-
-
-
-
-
-
-
 
 
 
