@@ -929,11 +929,11 @@ bwave_data = data_summary(ERG_data, varname="bwave",
 
 
   
-bwave_stimulus = ggplot(data=bwave_data, aes(x=timespan, y=bwave*1000000, group=.data[[grouping_var]], color=.data[[grouping_var]])) +
+bwave_stimulus = ggplot(data=bwave_data, aes(x=timespan, y=bwave, group=.data[[grouping_var]], color=.data[[grouping_var]])) +
   facet_wrap(.~stimulus+type, scales="free_y")+
   geom_line(aes(color=.data[[grouping_var]]))+
   geom_point()+
-  geom_errorbar(aes(ymin=bwave*1000000-SE*1000000, ymax=bwave*1000000+SE*1000000), width=.1)+
+  geom_errorbar(aes(ymin=bwave-SE, ymax=bwave+SE), width=.1)+
   labs(title="b-wave amplitude after different stimuli",
         x =time_label, y = "b-wave (μV)")+
   theme_linedraw()
@@ -1112,11 +1112,11 @@ awave_data = data_summary(ERG_data, varname="awave",
                      groupnames=c("stimulus", "timespan", "type", grouping_var))
 
 
-awave_stimulus = ggplot(data=awave_data, aes(x=timespan, y=awave*1000000, group=.data[[grouping_var]], color=.data[[grouping_var]])) +
+awave_stimulus = ggplot(data=awave_data, aes(x=timespan, y=awave, group=.data[[grouping_var]], color=.data[[grouping_var]])) +
   facet_wrap(.~stimulus+type, scales="free_y")+
   geom_line(aes(color=.data[[grouping_var]]))+
   geom_point()+
-  geom_errorbar(aes(ymin=awave*1000000-SE*1000000, ymax=awave*1000000+SE*1000000), width=.1)+
+  geom_errorbar(aes(ymin=awave-SE, ymax=awave+SE), width=.1)+
   labs(title="a-wave amplitude after different stimuli",
         x =time_label, y = "a-wave (μV)")+
     theme_linedraw()
@@ -1299,11 +1299,11 @@ flicker_stats$timespan=as.factor(flicker_stats$timespan)
 flicker_data = data_summary(flicker_stats, varname="avg_amp", 
                      groupnames=c("stimulus", "timespan", "type", "StimFreq",grouping_var))
 
-flicker_stimulus = ggplot(data=flicker_data, aes(x=timespan, y=avg_amp*1000000, group=.data[[grouping_var]], color=.data[[grouping_var]])) +
+flicker_stimulus = ggplot(data=flicker_data, aes(x=timespan, y=avg_amp, group=.data[[grouping_var]], color=.data[[grouping_var]])) +
   geom_line(aes(color=.data[[grouping_var]]))+
   facet_wrap(.~stimulus+StimFreq+type, labeller = label_both)+
   geom_point()+
-  geom_errorbar(aes(ymin=avg_amp*1000000-SE*1000000, ymax=avg_amp*1000000+SE*1000000), width=.1)+
+  geom_errorbar(aes(ymin=avg_amp-SE, ymax=avg_amp+SE), width=.1)+
   labs(title="average amplitude after flicker stimulus",
         x =time_label, y = "Average amplitude (μV)")+
   theme_linedraw()
