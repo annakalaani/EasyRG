@@ -235,6 +235,8 @@ df = df %>%
 df$Volt = as.numeric(df$Volt)
 df = na.omit(df)
 
+df$Volt = df$Volt * 1000000
+
 #add timepoints
 df$Time = rep_len(time_points, length.out = length(df$Volt))
 
@@ -1465,6 +1467,13 @@ anova_results_flicker_filtered %>%
   })
 
 ```
+
+
+
+
+
+
+
 
 
 
